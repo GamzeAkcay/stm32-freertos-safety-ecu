@@ -1,38 +1,64 @@
 # STM32 FreeRTOS Safety ECU
 
-A FreeRTOS-based rollover / overtemperature safety ECU on an STM32F407. It monitors tilt and shock with the on-board accelerometer, confirms faults with debouncing, latches a safe state until it is explicitly cleared, and (planned) reports telemetry and diagnostic trouble codes (DTCs) over CAN.
+A small automotive-style ECU on an STM32F407: a **FreeRTOS application written in embedded C++** that monitors the board for rollover, latches a safe state on faults, and is **diagnosed and updated over CAN with UDS** through my own bootloader, without touching the board.
+
+It is the application side of my [STM32 UDS bootloader](https://github.com/GamzeAkcay/stm32-uds-bootloader): the bootloader verifies and starts this application, and the application hands control back to the bootloader when a tester requests a software update. If a new image keeps crashing, the watchdog and a boot counter make the bootloader stay in update mode instead of boot-looping.
 
 Requirements are written before the code, and every requirement gets a measured or tested result: [docs/requirements.md](docs/requirements.md)
 
-> 🚧 **Work in progress.** The status table below shows what is actually implemented and verified today.
+> 🚧 **Work in progress.** The status table shows what is implemented and verified today. Nothing is marked done until it has been tested on hardware.
+
+## System overview
+
+```
+ Raspberry Pi (tester)                         STM32F407G-DISC1 (ECU)
+ ┌──────────────────────┐   CAN 500 kbit/s   ┌──────────────────────────────┐
+ │ Python HIL test suite│◄──────────────────►│ 0x08000000  UDS bootloader   │
+ │ python-can + pytest  │  UDS on ISO-TP     │             (CRC check, boot │
+ │ MCP2515              │  0x7E0 / 0x7E8     │              counter)        │
+ └──────────────────────┘                    │ 0x08008000  FreeRTOS app     │
+                                             │             (this repo, C++) │
+                                             │ SN65HVD230                   │
+                                             └──────────────────────────────┘
+```
+
+**Update flow:** tester reads the software version (`0x22 F189`) → requests the programming session (`0x10 02`) → the application leaves a marker and resets → the bootloader sees the marker, stays in programming mode and receives the new image → the new application starts → tester reads the new version.
 
 ## Status
 
 | Feature | Requirement | Status |
 |---|---|---|
 | FreeRTOS setup (native API, TIM6 timebase, stack-overflow and malloc-failed hooks) | REQ-R03 | ✅ Done |
-| Button ISR → queue → task, with 50 ms debounce | – | ✅ Done |
+| ISR → queue → task pattern with debounce (user button) | – | ✅ Done |
 | LIS3DSH accelerometer over SPI1, periodic 10 ms sampling (`vTaskDelayUntil`) | REQ-T01 | ✅ Done (jitter not yet measured) |
 | Rollover detection: > ~45° for 500 ms continuously | REQ-F01 | ✅ Done, verified by hand |
-| Latched safe state, cleared only by command and only when level | REQ-F06 | ✅ Done (button used as the clear command for now) |
-| Shock detection | REQ-F02 | ⏳ Planned |
-| DHT22 temperature sensor, overtemperature and sensor-loss faults | REQ-F03, F04, T06 | ⏳ Planned |
-| Relay output for the safe state | REQ-T03 | ⏳ Planned |
-| CAN telemetry, DTCs and commands | REQ-T02, T04, T05 | ⏳ Planned |
-| Independent watchdog with task liveness check-ins | REQ-F05 | ⏳ Planned |
-| Automated HIL tests from a Linux CAN node | REQ-F07 | ⏳ Planned |
-| Timing measurements (jitter, fault reaction time) with a logic analyzer | REQ-T01, T03 | ⏳ Planned |
+| Latched safe state, cleared only when the fault is gone | REQ-F03 | ✅ Done (button as clear command; moving to UDS `0x14`) |
+| Started by the bootloader from `0x08008000` | REQ-B01 | ⏳ Planned |
+| Application layer in embedded C++ (static allocation, no exceptions/RTTI) | REQ-R05 | ⏳ Planned |
+| CAN driver task with queue-based RX and mutex-protected TX, 100 ms heartbeat | REQ-T02 | ⏳ Planned |
+| UDS server in the application: `0x22` read version, `0x10 02` hand over to bootloader | REQ-B02, B03, T04 | ⏳ Planned |
+| Update over CAN without touching the board | REQ-B03 | ⏳ Planned |
+| DTCs: read with `0x19`, clear with `0x14` | REQ-F04 | ⏳ Planned |
+| Independent watchdog with per-task liveness check-ins, reset cause readable over UDS | REQ-F05 | ⏳ Planned |
+| Boot counter: bootloader stops jumping into an image that keeps crashing | REQ-B04, B05 | ⏳ Planned |
+| Automated HIL test suite on the Raspberry Pi (pytest + python-can) | all | ⏳ Planned |
+| Timing measurements with a logic analyzer | REQ-T01, T03 | ⏳ Planned |
 
-## Current tasks
+## Planned software structure
 
-| Task | Priority | Trigger | Job |
-|---|---|---|---|
-| `ImuTask` | 4 | every 10 ms | Reads X/Y, debounces tilt, latches the rollover fault, drives the status LEDs |
-| `ButtonTask` | 3 | queue (from EXTI0 ISR) | Debounces the user button and sends a "clear fault" notification to `ImuTask` |
+The hardware-near code generated by STM32CubeMX (`main.c`, HAL, interrupt handlers) stays in C. The application starts from a single `extern "C"` entry point, and everything above the drivers is written in C++:
 
-The ISR only puts a timestamp into a queue and returns; all processing happens in tasks. Tasks talk to each other through queues and task notifications, not shared globals.
+| Class | Responsibility |
+|---|---|
+| `CanBus` | CAN RX (ISR → queue → task) and mutex-protected TX |
+| `UdsServer` | Dispatches UDS requests to services (`0x10`, `0x14`, `0x19`, `0x22`, `0x31`) |
+| `FaultManager` | Fault state machine: debounce, latching, DTC storage |
+| `TiltMonitor` | Periodic accelerometer sampling and rollover detection |
+| `Watchdog` | Collects task check-ins and feeds the independent watchdog |
 
-**LEDs:** green = normal, red = rollover fault latched (or accelerometer not responding at startup).
+The ISO-TP layer is reused from the bootloader (C, written from scratch without a library).
+
+**Embedded C++ rules in this project:** all objects are allocated statically at startup (no `new`, no heap after the scheduler starts), exceptions and RTTI are disabled, errors are returned as values.
 
 ## Design notes
 
@@ -40,25 +66,20 @@ The ISR only puts a timestamp into a queue and returns; all processing happens i
 - **Latched safe state.** Once confirmed, the fault stays active even if the board is put back level. It is cleared only by an explicit command, and only if the fault condition is gone.
 - **First-SPI-transfer bug.** The first `WHO_AM_I` read returned `0xFF`. With CPOL = High, HAL enables the SPI peripheral on the first transfer, so SCK jumped from low to high *after* chip select was already low and the sensor lost sync. Fix: enable SPI before the first transaction.
 
-## Lab notes
-
-- [Lab 01 – `vTaskDelay` vs `vTaskDelayUntil`](docs/lab01-scheduling.md)
-
 ## Hardware
 
-| Part | Role | Status |
-|---|---|---|
-| STM32F407G-DISC1 | MCU board, on-board LIS3DSH accelerometer, LEDs, user button | In use |
-| DHT22 | Temperature and humidity | Planned |
-| Relay module | Safe-state output | Planned |
-| SN65HVD230 | CAN transceiver | Planned |
-| Linux PC / Raspberry Pi with CAN adapter | Tester node (logging, HIL tests) | Planned |
+| Part | Role |
+|---|---|
+| STM32F407G-DISC1 | ECU: on-board LIS3DSH accelerometer, LEDs, user button |
+| SN65HVD230 | CAN transceiver on the ECU side |
+| Raspberry Pi 4B + MCP2515 | Tester node: UDS client, update tool, HIL test suite |
+| USB logic analyzer | Timing measurements |
 
 ## Repository layout
 
 ```
-firmware/   STM32CubeIDE project (CubeMX-generated, user code in USER CODE blocks)
-docs/       requirements, lab notes
+firmware/   STM32CubeIDE project (CubeMX-generated C + application C++)
+docs/       requirements and verification results
 tools/      tester-side scripts (planned)
 ```
 

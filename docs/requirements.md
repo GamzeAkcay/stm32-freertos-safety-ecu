@@ -1,59 +1,71 @@
 # Requirements & Verification
 
-**System:** Rollover / overtemperature safety ECU on STM32F407 + FreeRTOS. Monitors tilt and shock (LIS3DSH accelerometer) and ambient temperature (DHT22), switches the load to a safe state via a relay, and reports telemetry and diagnostic trouble codes (DTCs) over CAN.
+**System:** FreeRTOS safety ECU on STM32F407, started and updated by the [STM32 UDS bootloader](https://github.com/GamzeAkcay/stm32-uds-bootloader). Monitors rollover with the on-board LIS3DSH accelerometer, latches a safe state on faults, and offers UDS diagnostics over CAN.
 
 Status legend: **TBD** = not yet verified. Every requirement gets a measured or tested result before it is marked done.
-Verification methods: **M** = measurement (logic analyzer / timestamps), **H** = HIL test (automated, via CAN), **U** = unit test (host), **R** = review / inspection.
+Verification methods: **M** = measurement (logic analyzer / timestamps), **H** = automated HIL test (Python on the tester node), **U** = unit test (host), **R** = review / inspection.
 
-## 1. Timing
-
-| ID | Requirement | Method | Result |
-|---|---|---|---|
-| REQ-T01 | The accelerometer is sampled with a period of 10 ms, jitter ≤ 50 µs (measured at a GPIO toggled by the sampling task) | M | TBD |
-| REQ-T02 | A telemetry frame (tilt angle, peak acceleration, temperature) is sent on CAN every 100 ms ± 1 ms | M, H | TBD |
-| REQ-T03 | After a fault is confirmed (post-debounce), the relay is opened within 5 ms | M | TBD |
-| REQ-T04 | After a fault is confirmed, the corresponding DTC frame appears on the bus within 10 ms | H | TBD |
-| REQ-T05 | A configuration command received over CAN takes effect within 100 ms | H | TBD |
-| REQ-T06 | Reading the DHT22 does not delay any higher-priority task by more than 100 µs (no busy-waiting in the scheduler's critical path) | M | TBD |
-
-## 2. Fault handling
+## 1. Boot and update
 
 | ID | Requirement | Method | Result |
 |---|---|---|---|
-| REQ-F01 | Tilt angle above the rollover threshold (default 45°) continuously for the debounce time (default 500 ms) raises a rollover DTC and enters the safe state | U, H | TBD |
-| REQ-F02 | Acceleration magnitude above the shock threshold (default 2 g) raises a shock DTC and enters the safe state | U, H | TBD |
-| REQ-F03 | Temperature above the overtemperature threshold for N consecutive readings raises an overtemperature DTC and enters the safe state | U, H | TBD |
-| REQ-F04 | Loss of communication with a sensor (timeout or checksum error, N consecutive failures) raises a sensor DTC and enters the safe state | U, H | TBD |
-| REQ-F05 | If any monitored task misses its liveness check-in, the independent watchdog resets the MCU within 500 ms; the reset cause is reported on CAN after reboot | H | TBD |
-| REQ-F06 | The safe state is latched and is left only by an explicit clear command over CAN, and only if no fault condition is still present | U, H | TBD |
-| REQ-F07 | Fault injection commands (test builds only) can simulate each fault above without touching the hardware | R, H | TBD |
+| REQ-B01 | The application runs correctly when started by the bootloader from `0x08008000` (vector table relocated, FreeRTOS scheduler starts) | H | TBD |
+| REQ-B02 | `0x22 F189` returns the application software version | H | TBD |
+| REQ-B03 | On `0x10 02` the application hands control to the bootloader, which stays in programming mode; a new image can then be written and started over CAN without touching the board | H | TBD |
+| REQ-B04 | If the application does not confirm a healthy boot in 3 consecutive starts, the bootloader stops jumping to it and waits in programming mode | H | TBD |
+| REQ-B05 | The application confirms a healthy boot after running for 5 s with all tasks alive | H | TBD |
 
-## 3. Robustness
+## 2. Timing
+
+| ID | Requirement | Method | Result |
+|---|---|---|---|
+| REQ-T01 | The accelerometer is sampled every 10 ms, jitter ≤ 50 µs (measured at a GPIO toggled by the sampling task) | M | TBD |
+| REQ-T02 | A heartbeat frame is sent on CAN every 100 ms ± 1 ms | M, H | TBD |
+| REQ-T03 | After a fault is confirmed, the safe-state output is set within 5 ms | M | TBD |
+| REQ-T04 | The application answers UDS requests within 50 ms (P2 server time) | H | TBD |
+| REQ-T05 | After `0x10 02`, the bootloader is ready to accept a download within 500 ms | H | TBD |
+
+## 3. Fault handling
+
+| ID | Requirement | Method | Result |
+|---|---|---|---|
+| REQ-F01 | Tilt above ~45° continuously for 500 ms raises a rollover DTC and enters the safe state | U, H | TBD (verified by hand) |
+| REQ-F02 | Acceleration magnitude above a shock threshold raises a shock DTC *(planned for a later stage)* | U, H | TBD |
+| REQ-F03 | The safe state is latched; it is cleared only by `0x14` and only if no fault condition is still present | U, H | TBD |
+| REQ-F04 | Stored DTCs can be read with `0x19` | H | TBD |
+| REQ-F05 | If any monitored task misses its liveness check-in, the independent watchdog resets the MCU within 500 ms; the reset cause can be read over UDS after reboot | H | TBD |
+| REQ-F06 | Test builds offer fault-injection routines (`0x31`) that simulate each fault without touching the hardware | R, H | TBD |
+
+## 4. Robustness
 
 | ID | Requirement | Method | Result |
 |---|---|---|---|
 | REQ-R01 | Every task keeps ≥ 25 % unused stack (stack high-water mark) under worst-case test load | M | TBD |
 | REQ-R02 | No heap allocation after the scheduler has started | R | TBD |
-| REQ-R03 | Stack overflow and malloc failure are trapped by hooks and indicated (red LED) | R, M | TBD |
+| REQ-R03 | Stack overflow and malloc failure are trapped by hooks and indicated (red LED) | R, M | Done (hooks implemented) |
 | REQ-R04 | Data shared between tasks is accessed only through queues, task notifications or a mutex | R | TBD |
+| REQ-R05 | Application code is C++ without exceptions or RTTI; all objects are statically allocated | R | TBD |
 
-## 4. CAN interface (500 kbit/s, standard IDs)
+## 5. CAN interface (500 kbit/s, standard IDs)
 
 | ID | Direction | Content |
 |---|---|---|
-| 0x100 | ECU → tester | Telemetry: tilt angle, peak acceleration, temperature, state |
-| 0x101 | ECU → tester | DTC event: code, status (active / latched / cleared) |
-| 0x102 | ECU → tester | Boot info: reset cause |
-| 0x200 | tester → ECU | Commands: set thresholds, clear faults, fault injection (test builds) |
+| 0x7E0 | tester → ECU | UDS requests (ISO-TP), same IDs as the bootloader |
+| 0x7E8 | ECU → tester | UDS responses (ISO-TP) |
+| 0x100 | ECU → tester | Heartbeat: state, active fault flags, uptime |
 
-IDs 0x7E0/0x7E8 are intentionally left free (used by the UDS bootloader project).
+### UDS services in the application
 
-## 5. Open items (decided by measurement, not assumption)
+| Service | Use |
+|---|---|
+| `0x10 02` | Enter programming session → hand over to the bootloader |
+| `0x14` | Clear DTCs (only if the fault condition is gone) |
+| `0x19` | Read DTCs |
+| `0x22` | Read data: `F189` software version, `FD00` last reset cause, `FD01` boot counter |
+| `0x31` | Routine control (test builds only): fault injection |
+
+## 6. Open items (decided by measurement, not assumption)
 
 - Noise level of the tilt angle at rest, which sets the minimum useful debounce and hysteresis.
-- Peak acceleration from a deliberate tap on the table vs. normal handling, which sets the shock threshold.
-- Whether the relay module's input triggers reliably from a 3.3 V GPIO.
-
-## 6. Stretch goal (only after §1–§3 are verified)
-
-- Linux-side gateway in C++: CAN telemetry forwarded over UDP, fault-clear and configuration commands accepted over TCP.
+- Where the "stay in bootloader" marker and the boot counter are stored so that they survive a reset (backup register or `.noinit` RAM).
+- Watchdog timeout vs. the longest legitimate task blocking time.
