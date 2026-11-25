@@ -33,7 +33,7 @@ Requirements are written before the code, and every requirement gets a measured 
 | LIS3DSH accelerometer over SPI1, periodic 10 ms sampling (`vTaskDelayUntil`) | REQ-T01 | ✅ Done (jitter not yet measured) |
 | Rollover detection: > ~45° for 500 ms continuously | REQ-F01 | ✅ Done, verified by hand |
 | Latched safe state, cleared only when the fault is gone | REQ-F03 | ✅ Done (button as clear command; moving to UDS `0x14`) |
-| Started by the bootloader from `0x08008000` | REQ-B01 | ⏳ Planned |
+| Started by the bootloader from `0x08008000` | REQ-B01 | ✅ Done (5/5 resets, verified by hand) |
 | Application layer in embedded C++ (static allocation, no exceptions/RTTI) | REQ-R05 | ⏳ Planned |
 | CAN driver task with queue-based RX and mutex-protected TX, 100 ms heartbeat | REQ-T02 | ⏳ Planned |
 | UDS server in the application: `0x22` read version, `0x10 02` hand over to bootloader | REQ-B02, B03, T04 | ⏳ Planned |

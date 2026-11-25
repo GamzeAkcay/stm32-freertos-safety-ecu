@@ -9,7 +9,7 @@ Verification methods: **M** = measurement (logic analyzer / timestamps), **H** =
 
 | ID | Requirement | Method | Result |
 |---|---|---|---|
-| REQ-B01 | The application runs correctly when started by the bootloader from `0x08008000` (vector table relocated, FreeRTOS scheduler starts) | H | TBD |
+| REQ-B01 | The application runs correctly when started by the bootloader from `0x08008000` (vector table relocated, FreeRTOS scheduler starts) | H | ✅ Verified manually: 5/5 resets via bootloader (HIL test pending) |
 | REQ-B02 | `0x22 F189` returns the application software version | H | TBD |
 | REQ-B03 | On `0x10 02` the application hands control to the bootloader, which stays in programming mode; a new image can then be written and started over CAN without touching the board | H | TBD |
 | REQ-B04 | If the application does not confirm a healthy boot in 3 consecutive starts, the bootloader stops jumping to it and waits in programming mode | H | TBD |
