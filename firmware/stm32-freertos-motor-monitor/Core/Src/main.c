@@ -22,6 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "app_main.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -260,6 +261,7 @@ int main(void)
   //xTaskCreate(TaskB, "TaskB", 256, NULL, 2, NULL);
   xTaskCreate(ButtonTask, "Button", 256, NULL, 3, NULL);
   xTaskCreate(ImuTask, "Imu", 256, NULL, 4, &imuTaskHandle);
+  app_main();
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
