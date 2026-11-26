@@ -55,7 +55,6 @@ const osThreadAttr_t defaultTask_attributes = {
 };
 /* USER CODE BEGIN PV */
 static QueueHandle_t btnQueue;
-static TaskHandle_t imuTaskHandle;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -106,98 +105,10 @@ static void ButtonTask(void *arg)
         continue;
       }
       lastAccepted = pressTick;
-      xTaskNotifyGive(imuTaskHandle);   // ImuTask'a "temizle" dürtmesi gönder
+      app_request_clear();
     }
   }
 }
-// İvmeölçerin bir kaydını okur
-static uint8_t acc_read_reg(uint8_t reg)
-{
-  uint8_t tx = reg | 0x80;   // en üst bit 1 = "okumak istiyorum"
-  uint8_t rx = 0;
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);   // konuşmaya başla
-  HAL_SPI_Transmit(&hspi1, &tx, 1, 10);                   // hangi kaydı istediğimi söyle
-  HAL_SPI_Receive(&hspi1, &rx, 1, 10);                    // cevabı al
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);     // konuşmayı bitir
-  return rx;
-}
-
-// İvmeölçerin bir kaydına yazar
-static void acc_write_reg(uint8_t reg, uint8_t val)
-{
-  uint8_t tx[2] = { reg & 0x7F, val };   // en üst bit 0 = "yazmak istiyorum"
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_RESET);
-  HAL_SPI_Transmit(&hspi1, tx, 2, 10);
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_3, GPIO_PIN_SET);
-}
-
-// Bir eksenin değerini okur (alt byte + üst byte = 16 bit)
-static int16_t acc_read_axis(uint8_t reg_low)
-{
-  uint8_t lo = acc_read_reg(reg_low);
-  uint8_t hi = acc_read_reg(reg_low + 1);
-  return (int16_t)((hi << 8) | lo);
-}
-
-static void ImuTask(void *arg)
-{
-  (void)arg;
-  __HAL_SPI_ENABLE(&hspi1);
-  vTaskDelay(pdMS_TO_TICKS(10));
-
-  if (acc_read_reg(0x0F) != 0x3F) {
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);
-    for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-  }
-
-  acc_write_reg(0x20, 0x67);
-
-  const int16_t  TILT_LIMIT      = 11800;  // yaklaşık 45 derece
-  const uint32_t CONFIRM_SAMPLES = 50;     // 50 x 10 ms = 500 ms
-  uint32_t tiltCount = 0;
-  int latched = 0;   // 1 = arıza kilitli
-  TickType_t lastWake = xTaskGetTickCount();
-
-  for (;;) {
-    int16_t x = acc_read_axis(0x28);
-    int16_t y = acc_read_axis(0x2A);
-
-    int tilted = (x > TILT_LIMIT || x < -TILT_LIMIT ||
-                  y > TILT_LIMIT || y < -TILT_LIMIT);
-
-    // Debounce: eğim kesintisiz devam ederse say, bir kez bile düzse sıfırla
-    if (tilted) {
-      if (tiltCount < CONFIRM_SAMPLES) {
-        tiltCount++;
-      }
-    } else {
-      tiltCount = 0;
-    }
-
-    if (tiltCount >= CONFIRM_SAMPLES) {
-      latched = 1;   // devrilme onaylandı: kilitle
-    }
-
-    // Butondan dürtme geldiyse ve kart artık düzse: kilidi aç
-    if (ulTaskNotifyTake(pdTRUE, 0) > 0) {
-      if (!tilted) {
-        latched = 0;
-      }
-    }
-
-    if (latched) {
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);
-    } else {
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-    }
-
-    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(10));
-  }
-}
-/* USER CODE END 0 */
-
 /**
   * @brief  The application entry point.
   * @retval int
@@ -260,7 +171,7 @@ int main(void)
   //xTaskCreate(TaskA, "TaskA", 256, NULL, 1, NULL);
   //xTaskCreate(TaskB, "TaskB", 256, NULL, 2, NULL);
   xTaskCreate(ButtonTask, "Button", 256, NULL, 3, NULL);
-  xTaskCreate(ImuTask, "Imu", 256, NULL, 4, &imuTaskHandle);
+  //xTaskCreate(ImuTask, "Imu", 256, NULL, 4, &imuTaskHandle);
   app_main();
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
